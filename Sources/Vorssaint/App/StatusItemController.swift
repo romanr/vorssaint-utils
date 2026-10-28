@@ -22,6 +22,11 @@ final class StatusItemController {
     private var clipboardPreviewStatusItem: NSStatusItem?
     private var metricStatusItems: [String: NSStatusItem] = [:]
     private var metricStatusItemFocus: [String: MenuBarMetric] = [:]
+    /// The spinning fan hosted on the fan metric item under Gauges. Torn down
+    /// whenever that item goes away or the fan returns to plain text, which
+    /// takes the view out of its window and so stops its animation.
+    private var liveFanView: LiveFanView?
+    private var liveFanMetricID = MenuBarMetric.fanSpeed.rawValue
     private var cancellables = Set<AnyCancellable>()
     private var titleTimer: Timer?
     private var defaultsObserver: NSObjectProtocol?
@@ -267,6 +272,7 @@ final class StatusItemController {
         // a block observer that outlives this instance.
         titleTimer?.invalidate()
         if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
+        teardownLiveFanIfNeeded()
         for item in metricStatusItems.values {
             NSStatusBar.system.removeStatusItem(item)
         }
@@ -482,11 +488,25 @@ final class StatusItemController {
             title.append(NSAttributedString(string: countdown))
             includesCountdown = true
         }
+        let liveFanPercent = Self.liveFanPercent(metrics: metrics, snapshot: snapshot)
         if separateMetrics {
-            refreshMetricStatusItems(metrics: metrics, snapshot: snapshot, strings: strings)
+            refreshMetricStatusItems(metrics: metrics, snapshot: snapshot, strings: strings,
+                                     liveFanPercent: liveFanPercent)
         } else {
-            removeMetricStatusItems(except: Set<String>())
+            // The spinning fan is the one thing that still gets its own item
+            // beside the combined title: it is a view, not text.
+            removeMetricStatusItems(except: liveFanPercent == nil ? Set<String>() : [liveFanMetricID])
             renderedMetricItemCount = 0
+            if let liveFanPercent {
+                let fan = MenuBarMetric.fanSpeed
+                let group = MetricStatusGroup(id: liveFanMetricID, metrics: [fan], focusMetric: fan,
+                                              title: fan.title(strings))
+                let item = metricStatusItems[group.id] ?? installMetricStatusItem(for: group)
+                metricStatusItemFocus[group.id] = fan
+                hostLiveFan(percent: liveFanPercent, on: item, title: group.title)
+            } else {
+                teardownLiveFanIfNeeded()
+            }
         }
         if !separateMetrics, !metrics.isEmpty {
             let metricsTitle = MenuBarRenderer.attributed(for: snapshot,
@@ -587,14 +607,26 @@ final class StatusItemController {
 
     private func refreshMetricStatusItems(metrics: [MenuBarMetric],
                                           snapshot: SystemSnapshot,
-                                          strings: Strings) {
+                                          strings: Strings,
+                                          liveFanPercent: Int?) {
         let groups = Self.metricStatusGroups(for: metrics, strings: strings)
         let wanted = Set(groups.map(\.id))
         removeMetricStatusItems(except: wanted)
+        if liveFanPercent == nil { teardownLiveFanIfNeeded() }
         var rendered = 0
         defer { renderedMetricItemCount = rendered }
 
         for group in groups {
+            if group.id == liveFanMetricID, let liveFanPercent {
+                // A view rather than a title, so it never counts as an empty
+                // render and the item is kept for as long as the fan reads.
+                metricEmptyRenders[group.id] = 0
+                rendered += 1
+                let item = metricStatusItems[group.id] ?? installMetricStatusItem(for: group)
+                metricStatusItemFocus[group.id] = group.focusMetric
+                hostLiveFan(percent: liveFanPercent, on: item, title: group.title)
+                continue
+            }
             let title = MenuBarRenderer.attributed(for: snapshot,
                                                    metrics: group.metrics,
                                                    allowStacked: false)
@@ -636,6 +668,10 @@ final class StatusItemController {
             }
             if button.toolTip != group.title {
                 button.toolTip = group.title
+            }
+            // Drop the label the live fan set; the text title speaks for itself.
+            if button.accessibilityLabel() != nil {
+                button.setAccessibilityLabel(nil)
             }
         }
     }
@@ -754,8 +790,70 @@ final class StatusItemController {
     private func removeMetricStatusItem(for id: String) {
         metricStatusItemFocus.removeValue(forKey: id)
         metricEmptyRenders.removeValue(forKey: id)
+        if id == liveFanMetricID { teardownLiveFanIfNeeded() }
         guard let item = metricStatusItems.removeValue(forKey: id) else { return }
         NSStatusBar.system.removeStatusItem(item)
+    }
+
+    // MARK: - Live fan
+
+    /// The fan's percent when the spinning fan should replace its text: Gauges
+    /// is chosen, the fan is pinned and there is a valid reading.
+    private static func liveFanPercent(metrics: [MenuBarMetric], snapshot: SystemSnapshot) -> Int? {
+        guard MenuBarMetricAppearance.current == .bars, metrics.contains(.fanSpeed) else { return nil }
+        return MenuBarRenderer.fanLiveIconPercent(for: snapshot)
+    }
+
+    /// Puts the spinning fan on the item's button and feeds it the current
+    /// percent. Clicks still reach the button: the view never takes a hit.
+    private func hostLiveFan(percent: Int, on item: NSStatusItem, title: String) {
+        guard let button = item.button else { return }
+        let fan: LiveFanView
+        if let existing = liveFanView {
+            fan = existing
+        } else {
+            fan = LiveFanView()
+            fan.setTint(.labelColor)
+            liveFanView = fan
+        }
+        let width = fan.intrinsicContentSize.width
+        if item.length != width { item.length = width }
+        if button.attributedTitle.length != 0 {
+            button.attributedTitle = NSAttributedString(string: "")
+        }
+        if button.image !== Self.emptyStatusImage {
+            button.image = Self.emptyStatusImage
+        }
+        if button.imagePosition != .noImage {
+            button.imagePosition = .noImage
+        }
+        if button.toolTip != title {
+            button.toolTip = title
+        }
+        if button.accessibilityLabel() != title {
+            button.setAccessibilityLabel(title)
+        }
+        if fan.superview !== button {
+            fan.removeFromSuperview()
+            fan.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(fan)
+            let size = fan.intrinsicContentSize
+            NSLayoutConstraint.activate([
+                fan.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                fan.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                fan.widthAnchor.constraint(equalToConstant: size.width),
+                fan.heightAnchor.constraint(equalToConstant: size.height)
+            ])
+        }
+        fan.setValue(percent)
+    }
+
+    /// Takes the fan out of its window, which stops the animation and its
+    /// speed timer.
+    private func teardownLiveFanIfNeeded() {
+        guard let fan = liveFanView else { return }
+        liveFanView = nil
+        fan.removeFromSuperview()
     }
 
     // MARK: - Clipboard preview item

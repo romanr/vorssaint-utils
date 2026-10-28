@@ -394,6 +394,26 @@ enum FanControlPolicy {
         return speeds.map { String(Int($0.rounded())) }.joined(separator: "/")
     }
 
+    /// One maximum per fan index; a missing or invalid one becomes 0 so only
+    /// that fan scores 0% rather than the whole array being dropped.
+    static func fanMaxima(from readings: [Double?]) -> [Double] {
+        readings.map { reading in
+            guard let reading, validBounds(minimum: 0, maximum: reading) else { return 0 }
+            return reading
+        }
+    }
+
+    static func menuBarAveragePercent(speeds: [Double], maxima: [Double]) -> Int? {
+        guard !speeds.isEmpty, speeds.count == maxima.count,
+              speeds.allSatisfy(validReading) else { return nil }
+        let percents: [Int] = zip(speeds, maxima).map { speed, maximum in
+            guard validBounds(minimum: 0, maximum: maximum) else { return 0 }
+            return min(100, max(0, Int((100 * speed / maximum).rounded())))
+        }
+        let mean = Double(percents.reduce(0, +)) / Double(percents.count)
+        return Int(mean.rounded())
+    }
+
     static func menuBarWidthUnits(fanCount: Int) -> Int {
         guard (1...maximumFanCount).contains(fanCount) else { return 0 }
         return 7 + fanCount * 5 + (fanCount - 1)

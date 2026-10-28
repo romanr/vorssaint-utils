@@ -60,17 +60,25 @@ struct MenuBarMetricsPreview: View {
         let _ = metricSpacing
         let metrics = activeMetrics
         let lines = separateMetrics ? [] : MenuBarRenderer.lines(for: monitor.snapshot, metrics: metrics)
+        // Gauges draw the fan as a live view rather than RPM text.
+        let fanLive = fanHostedByMetrics(metrics)
+            && MenuBarRenderer.fanLiveIconPercent(for: monitor.snapshot) != nil
         // Separate items are their own status items, which macOS seats to
         // the left of the one that was there first.
-        let items = separateMetrics
+        let items: [(lines: [[MenuBarSegment]], isFan: Bool)] = separateMetrics
             ? StatusItemController.metricStatusGroups(for: metrics, strings: l10n.s)
-                .map { MenuBarRenderer.lines(for: monitor.snapshot, metrics: $0.metrics) }
-                .filter { !$0.isEmpty }
+                .compactMap { group in
+                    if fanLive, group.metrics == [.fanSpeed] { return ([], true) }
+                    let groupLines = MenuBarRenderer.lines(for: monitor.snapshot, metrics: group.metrics)
+                    return groupLines.isEmpty ? nil : (groupLines, false)
+                }
             : []
+        // Combined title: the fan keeps its own spot beside the metric lines.
+        let combinedFan = fanLive && !separateMetrics
         // The steady state of the hide option: a pending update, a running
         // Keep Awake or a muted microphone brings the real icon back, and the
         // preview does not pretend to know about any of them.
-        let iconHidden = hideIconWithMetrics && (!lines.isEmpty || !items.isEmpty)
+        let iconHidden = hideIconWithMetrics && (!lines.isEmpty || !items.isEmpty || combinedFan)
 
         HStack(spacing: 12) {
             Spacer()
@@ -81,8 +89,13 @@ struct MenuBarMetricsPreview: View {
                     .foregroundStyle(.white.opacity(0.5))
             }
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                linesView(item)
+                if item.isFan {
+                    liveFan
+                } else {
+                    linesView(item.lines)
+                }
             }
+            if combinedFan { liveFan }
             if !iconHidden || !lines.isEmpty {
                 HStack(spacing: 5) {
                     if !iconHidden {
@@ -118,6 +131,19 @@ struct MenuBarMetricsPreview: View {
                 .frame(height: MenuBarRenderer.statusLineHeight(stacked: stacked))
             }
         }
+    }
+
+    /// Gauges replace the RPM text with the live fan, driven by the real reading.
+    private var liveFan: some View {
+        LiveFanRepresentable(interactive: false,
+                             percent: MenuBarRenderer.fanLiveIconPercent(for: monitor.snapshot) ?? 0,
+                             tint: .white)
+            .frame(width: 16, height: 16)
+            .allowsHitTesting(false)
+    }
+
+    private func fanHostedByMetrics(_ metrics: [MenuBarMetric]) -> Bool {
+        metricAppearance == "bars" && metrics.contains(.fanSpeed)
     }
 
     private var activeMetrics: [MenuBarMetric] {
