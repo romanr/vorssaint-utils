@@ -408,7 +408,7 @@ enum FanControlPolicy {
               speeds.allSatisfy(validReading) else { return nil }
         let percents: [Int] = zip(speeds, maxima).map { speed, maximum in
             guard validBounds(minimum: 0, maximum: maximum) else { return 0 }
-            return min(100, max(0, Int((100 * speed / maximum).rounded())))
+            return Int(min(100.0, max(0.0, (100 * speed / maximum).rounded())))
         }
         let mean = Double(percents.reduce(0, +)) / Double(percents.count)
         return Int(mean.rounded())
