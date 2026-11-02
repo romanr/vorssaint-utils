@@ -476,6 +476,7 @@ private final class StopSettleDelegate: NSObject, CAAnimationDelegate {
     }
 
     func animationDidStop(_ anim: CAAnimation, finished flag: Bool) {
+        guard flag else { return }
         self.onStop()
     }
 }
