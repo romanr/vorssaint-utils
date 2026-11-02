@@ -818,8 +818,9 @@ final class StatusItemController {
         if button.toolTip != title {
             button.toolTip = title
         }
-        if button.accessibilityLabel() != title {
-            button.setAccessibilityLabel(title)
+        let accessibilityLabel = "\(title): \(percent)%"
+        if button.accessibilityLabel() != accessibilityLabel {
+            button.setAccessibilityLabel(accessibilityLabel)
         }
         if fan.superview !== button {
             fan.removeFromSuperview()
