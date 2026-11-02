@@ -51,6 +51,7 @@ struct SystemSnapshot {
     var memorySwapUsed: UInt64?
     var memoryPressure: MemoryPressure = .unknown
     var fanSpeeds: [Double] = []
+    var fanMaxSpeeds: [Double] = []
 
     // Network
     var netDownBytesPerSec: Double?
@@ -169,6 +170,7 @@ final class SystemMonitor: ObservableObject {
     private var gpuKeys: [SMCClient.Key] = []
     private var batteryKeys: [SMCClient.Key] = []
     private var fanKeys: [SMCClient.Key] = []
+    private var fanMaxKeys: [SMCClient.Key?] = []
     private var tempKeysPrepared = false
     private var fanKeysPrepared = false
     private var cpuTemperaturePlatform: CPUTemperaturePlatform = .generic
@@ -201,6 +203,7 @@ final class SystemMonitor: ObservableObject {
     private var gpuTemperatureCache: CachedSensorReading?
     private var batteryTemperatureCache: CachedSensorReading?
     private var lastFanSpeeds: [Double] = []
+    private var lastFanMaxSpeeds: [Double] = []
     private var missedFanSpeedSamples = 0
     private var lastDiskReading: DiskReading?
     private var lastPowerReading: PowerReading?
@@ -940,14 +943,18 @@ final class SystemMonitor: ObservableObject {
                 if take(plan.fanSpeedKind) {
                     if let speeds = self.readFanSpeeds() {
                         self.lastFanSpeeds = speeds
+                        self.lastFanMaxSpeeds = self.readFanMaxSpeeds() ?? []
                         self.missedFanSpeedSamples = 0
                     } else if self.missedFanSpeedSamples < 3 {
                         self.missedFanSpeedSamples += 1
                     } else {
                         self.lastFanSpeeds = []
+                        self.lastFanMaxSpeeds = []
                     }
                 }
                 next.fanSpeeds = self.lastFanSpeeds
+                next.fanMaxSpeeds = self.lastFanMaxSpeeds.count == self.lastFanSpeeds.count
+                    ? self.lastFanMaxSpeeds : []
             }
 
             if plan.needConnectedDevices {
@@ -1064,7 +1071,13 @@ final class SystemMonitor: ObservableObject {
             let count = Self.fanTelemetryCount
             if count > 0 {
                 let keys = (0..<count).compactMap { client.key(named: "F\($0)Ac") }
-                if keys.count == count { fanKeys = keys }
+                // One slot per fan: a missing F*Mx stays nil (scored 0%) instead
+                // of discarding the maxima of every other fan.
+                let maxKeys = (0..<count).map { client.key(named: "F\($0)Mx") }
+                if keys.count == count {
+                    fanKeys = keys
+                    fanMaxKeys = maxKeys
+                }
             }
         }
 
@@ -1113,6 +1126,11 @@ final class SystemMonitor: ObservableObject {
         guard let smc, !fanKeys.isEmpty else { return nil }
         return FanControlPolicy.telemetryReadings(expectedCount: fanKeys.count,
                                                   readings: fanKeys.map { smc.readValue($0) })
+    }
+
+    private func readFanMaxSpeeds() -> [Double]? {
+        guard let smc, fanMaxKeys.count == fanKeys.count, !fanMaxKeys.isEmpty else { return nil }
+        return FanControlPolicy.fanMaxima(from: fanMaxKeys.map { key in key.flatMap { smc.readValue($0) } })
     }
 
     private func cpuTemperature() -> Double? {

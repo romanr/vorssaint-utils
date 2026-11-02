@@ -1336,6 +1336,21 @@ enum FeatureCatalogTests {
                 && FanControlPolicy.menuBarValue(for: []) == nil
                 && FanControlPolicy.menuBarValue(for: [.infinity]) == nil,
                "fan RPM menu bar text supports one or several validated fans")
+        suite.expect(FanControlPolicy.menuBarAveragePercent(speeds: [2900], maxima: [5800]) == 50
+                && FanControlPolicy.menuBarAveragePercent(speeds: [1450, 4350], maxima: [5800, 5800]) == 50
+                && FanControlPolicy.menuBarAveragePercent(speeds: [0], maxima: [5800]) == 0
+                && FanControlPolicy.menuBarAveragePercent(speeds: [], maxima: []) == nil
+                && FanControlPolicy.menuBarAveragePercent(speeds: [1200], maxima: []) == nil
+                && FanControlPolicy.menuBarAveragePercent(speeds: [1200, 1300], maxima: [5800]) == nil
+                && FanControlPolicy.menuBarAveragePercent(speeds: [.infinity], maxima: [5800]) == nil
+                && FanControlPolicy.menuBarAveragePercent(speeds: [2900], maxima: [0]) == 0,
+               "fan menu bar average percent uses rpm/max per fan and rejects bad sets")
+        let partialMaxima = FanControlPolicy.fanMaxima(from: [5_800, nil])
+        suite.expect(partialMaxima == [5_800, 0]
+                && FanControlPolicy.fanMaxima(from: [.infinity, 5_800, -1]) == [0, 5_800, 0]
+                && FanControlPolicy.menuBarAveragePercent(speeds: [2_900, 2_900], maxima: partialMaxima) == 25
+                && FanControlPolicy.menuBarAveragePercent(speeds: [2_900, 2_900], maxima: [5_800, 0]) == 25,
+               "a missing fan maximum scores only that fan as 0%, keeping the other fan's average")
         suite.expect(FanControlPolicy.menuBarWidthUnits(fanCount: 1) == 12
                 && FanControlPolicy.menuBarWidthUnits(fanCount: 2) == 18
                 && FanControlPolicy.menuBarWidthUnits(fanCount: 0) == 0,

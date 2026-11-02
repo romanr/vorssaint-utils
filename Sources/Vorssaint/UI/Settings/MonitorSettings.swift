@@ -301,6 +301,7 @@ private struct MenuBarStyleChoice: View {
         switch appearance {
         case .values:
             HStack(spacing: 10) {
+                block(label: "RPM", value: "3200")
                 block(label: "CPU", value: "42%")
                 block(label: "RAM", value: "61%")
             }
@@ -308,6 +309,11 @@ private struct MenuBarStyleChoice: View {
             HStack(spacing: 10) {
                 bar(label: "CPU", fraction: 0.42)
                 bar(label: "RAM", fraction: 0.61)
+                // Auto-demo, not clickable: the card Button owns the click.
+                LiveFanRepresentable(interactive: false, autoDemo: true, tint: .white)
+                    .frame(width: 16, height: 16)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
         }
     }
